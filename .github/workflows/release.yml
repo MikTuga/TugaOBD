@@ -1,0 +1,62 @@
+name: Release APK (debug-signed)
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.2.1)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      APP_ID: tugaobd
+      REF_NAME: ${{ github.ref_name }}
+      INPUT_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v3
+
+      - name: Build debug APK
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Stage APK
+        id: stage
+        run: |
+          set -euo pipefail
+          src=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          if [ -z "$src" ]; then
+            echo "::error::no debug APK produced"
+            exit 1
+          fi
+          mkdir -p dist
+          cp "$src" "dist/${APP_ID}-release.apk"
+          TAG="${REF_NAME:-$INPUT_TAG}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "apk=dist/${APP_ID}-release.apk" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum dist/${APP_ID}-release.apk | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.stage.outputs.tag }}
+          name: ${{ steps.stage.outputs.tag }}
+          generate_release_notes: true
+          files: ${{ steps.stage.outputs.apk }}
+          fail_on_unmatched_files: true
+          body: |
+            **SHA-256:** `${{ steps.stage.outputs.sha256 }}`
+            **Signed by:** Android debug key (community build). Install via sideload — Tuga Store treats this package the same as any other.
+            A maintainer can switch this to a signed release by adding repo secrets `KEYSTORE_BASE64` / `KEYSTORE_PASSWORD` / `KEY_ALIAS` / `KEY_PASSWORD` and copying the workflow from MikTuga/TugaStore.
